@@ -1,0 +1,13 @@
+stm32f3xx_hal_comp.c:402:13:HAL_COMP_MspInit	0	static
+stm32f3xx_hal_comp.c:298:19:HAL_COMP_Init	16	static
+stm32f3xx_hal_comp.c:417:13:HAL_COMP_MspDeInit	0	static
+stm32f3xx_hal_comp.c:368:19:HAL_COMP_DeInit	16	static
+stm32f3xx_hal_comp.c:454:19:HAL_COMP_Start	20	static
+stm32f3xx_hal_comp.c:523:19:HAL_COMP_Stop	8	static
+stm32f3xx_hal_comp.c:561:19:HAL_COMP_Start_IT	20	static
+stm32f3xx_hal_comp.c:633:19:HAL_COMP_Stop_IT	4	static
+stm32f3xx_hal_comp.c:670:13:HAL_COMP_TriggerCallback	0	static
+stm32f3xx_hal_comp.c:650:6:HAL_COMP_IRQHandler	8	static
+stm32f3xx_hal_comp.c:704:19:HAL_COMP_Lock	0	static
+stm32f3xx_hal_comp.c:762:10:HAL_COMP_GetOutputLevel	0	static
+stm32f3xx_hal_comp.c:801:23:HAL_COMP_GetState	0	static
