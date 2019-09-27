@@ -1,5 +1,5 @@
 /** Test Program for STM32F3 esc version 2, with Drv8323 driver.
- * Thanks to o-drive for register setup SPI code.
+ * Thanks to o-drive for SPI code for TI driver setup https://github.com/madcowswe/ODrive
  *
  * TODO, work on startup sequence. currently might not start up all motors.
  * possibly polling comparator at startup to limit triggers.
@@ -35,13 +35,14 @@ DMA_HandleTypeDef hdma_tim2_ch2_ch4;
 /* USER CODE BEGIN PV */
 int brake = 1;                   // turns on motor brake on 0 input , shorts motor windings
 char slow_decay = 1;              // turns on complementary PWM with active braking 1 or freewheel 0
-int start_power = 225;            // startup duty cycle , out of 1499
+int start_power = 325;            // startup duty cycle , out of 1499
 char advancedivisorup = 10;        // amount of advance when BEMF rising, 60 degree time / 10 = 6 degree advance for example
 char advancedivisordown = 10;      // 60 degree time / advancedivisor = advance, should set proportianal to rpm in future
 int pwm_settle = 60;             // blanking source duration for comparator, out of 1499
 int start_com_interval = 10000;    // set a start interval after start sequence, small motors may need lower interval
 int startupcycles = 15000;           // number of cycles to keep startup power reduction
 
+int bi_direction = 0;
 int max_servo_deviation = 150;
 
 int bemf_counts;
@@ -52,7 +53,7 @@ char error = 0;
 int signal_timeout_threshold = 20000;
 int signaltimeout = 0;
 int servoraw;
-
+int adjusted_input = 0;
 int commutate_count= 0;
 
 
@@ -97,6 +98,7 @@ char inputSet = 0;
 
 
 /* Private variables ---------------------------------------------------------*/
+/*Register setup for the DRV8323 driver*/
 uint16_t DRV8323regDrvCtrl =
   0 << 9  | //DIS_CPUV
   0 << 8  | //DIS_GDF
@@ -121,9 +123,9 @@ uint16_t DRV8323regGateDrvLS =
 
 uint16_t DRV8323regOcpCtrl =
   1 << 10 | //TRETRY
-  3 << 8  | //DEAD_TIME
-  2 << 6  | //OCP_MODE
-  2 << 4  | //OCP_DEG
+  2 << 8  | //DEAD_TIME
+  1 << 6  | //OCP_MODE
+  1 << 4  | //OCP_DEG
   0;        //VDS_LVL
 
 uint16_t DRV8323regCsaCtrl =
@@ -423,50 +425,23 @@ void commutate() {
 	changeCompInput();
 }
 
+/*
 
-
-
+*/
 void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp) {
 	if (TIM3->CNT < commutation_interval>>1){
 		return;
 	}
 	/* Turn On LED3 */
-//	if( bemf_counts > 100 && commutation_interval < 300){
-//		thiszctime = TIM3->CNT;
-////		GPIOA->BSRR = GPIO_PIN_15;
-//		while (TIM3->CNT - thiszctime < filter_delay){
-//
-//		}
-//		if (HAL_COMP_GetOutputLevel(&hcomp1) == rising){
-//				return;
-//		}
-//		TIM3->CNT = 0;
-//
-//		HAL_COMP_Stop_IT(&hcomp1);
-//
-//        zctimeout = 0;
-//        commutation_interval = ((2 *commutation_interval) + thiszctime) / 3;     // TEST!   divide by two when tracking up down time independant
-////		bad_commutation = 0;
-//		//			}
-//					advance = commutation_interval / advancedivisor;
-//					waitTime = commutation_interval /2  - advance;
-//					blanktime = commutation_interval / 4;
-//
-//					while (TIM3->CNT  < waitTime){
-//								}
-//					         //   TIM1->CNT = duty_cycle;
-//                             //   forcedcount = 0;
-//								compit = 0;
-//								commutate();
-//								while (TIM3->CNT  < waitTime + blanktime){
-//								}
-//
-//	}else{
-
-		timestamp = TIM3->CNT;
+		thiszctime = TIM3->CNT;
 	//	GPIOA->BSRR = GPIO_PIN_15;
-
-	if (compit > 200){
+if (commutation_interval < 300 && bemf_counts < 300){         // startup failure
+	HAL_COMP_Stop_IT(&hcomp1);
+	input = 0;
+			error = 2;
+			return;
+}
+	if (compit > 20){
 		HAL_COMP_Stop_IT(&hcomp1);
 		error = 1;
 		return;
@@ -475,19 +450,14 @@ void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp) {
 	while (TIM3->CNT - timestamp < filter_delay){
 
 	}
-
 	if (rising){
 	//	advancedivisor = advancedivisorup;
 		for (int i = 0; i < filter_level; i++){
 		if (HAL_COMP_GetOutputLevel(&hcomp1) == COMP_OUTPUTLEVEL_HIGH){
 	//		GPIOA->BRR = GPIO_PIN_15;
-
-
-			return;
+		return;
 		}
 		}
-
-
 	}else{
 	//	advancedivisor = advancedivisordown;
 		for (int i = 0; i < filter_level; i++){
@@ -499,8 +469,8 @@ void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp) {
 		}
 
 	}
-	thiszctime = timestamp;
-	TIM3->CNT = TIM3->CNT - timestamp;
+	timestamp = TIM3->CNT;
+	TIM3->CNT = 0 + timestamp - thiszctime;
 
 	HAL_COMP_Stop_IT(&hcomp1);
 
@@ -620,11 +590,11 @@ void computeServoInput(){                   // maps the servo pulse length to ne
 
 
 
-   if((dma_buffer[1] - dma_buffer[0] > 1000 ) && ((dma_buffer[1] - dma_buffer[0]) < 2010)){ // servo zone
+   if((dma_buffer[1] - dma_buffer[0] > 980 ) && ((dma_buffer[1] - dma_buffer[0]) < 2010)){ // servo zone
 	   if((dma_buffer[2] - dma_buffer[1]) > 2500 ){          // blank space
 		   servoraw = map((dma_buffer[1] - dma_buffer[0]), 1090, 2000, 0, 2000);
 	   }
-	} else if((dma_buffer[2] - dma_buffer[1] > 1000 ) && ((dma_buffer[2] - dma_buffer[1]) < 2010)){ // servo zone
+	} else if((dma_buffer[2] - dma_buffer[1] > 980 ) && ((dma_buffer[2] - dma_buffer[1]) < 2010)){ // servo zone
   	   if((dma_buffer[1] - dma_buffer[0]) > 2500 ){          // blank space
   		   servoraw = map((dma_buffer[2] - dma_buffer[1]), 1090, 2000, 0, 2000);
   	   }
@@ -662,18 +632,7 @@ void startMotor() {
 
 	commutate();
 	HAL_Delay(2);
-//
-//
-//	commutate();
-//		HAL_Delay(12);
 
-
-
-
-
-
-
-//	commutate();
 	commutation_interval = start_com_interval;
 	TIM3->CNT = 0;
 //	TIM2->CNT = 0;
@@ -743,14 +702,12 @@ int main(void)
   	HAL_TIM_Base_Start(&htim3);
 
 
-	playStartupTune();        // plays a startup tune throught the motor
+	        // plays a startup tune throught the motor
 
-	if (HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_5) != HAL_OK)
+	if (HAL_TIM_OC_Start(&htim1, TIM_CHANNEL_5) != HAL_OK)
 	{
-		_Error_Handler(__FILE__, __LINE__);
+	//	_Error_Handler(__FILE__, __LINE__);
 	}
-
-//	HAL_TIM_IC_Start_DMA(&htim2, TIM_CHANNEL_4, dma_buffer , 64);  // start input capture to DMA
 
 	//  	if (HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADC1ConvertedValues, 2) != HAL_OK)
 	//  		return 0;
@@ -766,13 +723,15 @@ int main(void)
 		Error_Handler();
 	}
   	DRV8323_setupSpi();
-
+  	playStartupTune();
   	TIM1->CCR1 = 0;												// set duty cycle to low start amount
   	TIM1->CCR2 = 0;
   	TIM1->CCR3 = 0;
   	TIM1->CCR5 = pwm_settle;
 
-
+if(bi_direction){
+	newinput = 1005;
+}
 
   	///test code
   	 // 	 LL_GPIO_SetPinMode(GPIOA, GPIO_PIN_7, LL_GPIO_MODE_OUTPUT);
@@ -810,41 +769,62 @@ int main(void)
 		  count = 0;
 	  }
 
-
-
-	//  HAL_Delay(1);
-	//	  getADCs();
-
 	/*
 	 * The next section takes newinput and keeps it within rate of change limits,
 	 * the variable newinput can come from any source.
 	 */
 
-	if (newinput > 100){
-		if (newinput > 2000){
-			newinput = 2000;
-		}
-		if (newinput >= input){
-			if (newinput - input > 50){
-				count++;
-				if (count > 10){
-					input += 10;
-					count = 0;
+		if (bi_direction) {
+			//char oldbrake = brake;
+
+			if (newinput > 1100) {
+				if (forward == 0) {
+					forward = 1;
+					bemf_counts = 0;
+
 				}
+				adjusted_input = (newinput - 1050) * 3;
+
+			}
+			if (newinput < 780) {
+				if (forward == 1) {
+					forward = 0;
+					bemf_counts = 0;
+
+				}
+				adjusted_input = ((780 - newinput) * 3) + 100;
+			}
+
+			if (newinput > 779 && newinput < 1101) {
+				adjusted_input = 0;
+			}
+	}else{           // single direction only
+		adjusted_input = newinput;
+	}
+
+//	  adjusted_input = newinput;
+	  if (adjusted_input > 100){
+		if (adjusted_input > 2000){
+			adjusted_input = 2000;
+		}
+		if (adjusted_input >= input){
+			if (adjusted_input - input > 1){
+					input += 1;
+
 
 			}else{
-				input = newinput;
+				input = adjusted_input;
 			}
 		}
-		if (newinput < input){
-			if (input - newinput > 50){
-				input--;
+		if (adjusted_input < input){
+			if (input - adjusted_input > 1){
+				input -=1 ;
 			}else{
-				input = newinput;
+				input = adjusted_input;
 			}
 		}
 	}else{
-		input = newinput;
+		input = adjusted_input;
 	}
 
 	if (inputSet == 0){
@@ -853,18 +833,19 @@ int main(void)
 
 	}
 
-	if (bemf_counts < 50 || commutation_interval > 2000 ) {
-				filter_delay = 5;
-				filter_level = 10;
+	if (bemf_counts < 3 || commutation_interval > 3000) {
+				filter_delay = 0;
+				filter_level = 12;
 			} else {
 				filter_delay = 0;
-				filter_level = 4;
+				filter_level = 5;
 
 			}
-	advancedivisor = map((commutation_interval), 100, 8000, 4, 10);
+	advancedivisor = map((commutation_interval), 100, 8000, 4, 8);
 
 	signaltimeout++;
 	if (signaltimeout > signal_timeout_threshold) {
+		signaltimeout = 0;
 		input = 0;
 		armed = 0;
 		armedcount = 0;
@@ -908,7 +889,7 @@ int main(void)
 		if (duty_cycle > 1498){                      //  limit to 1400 for testing out of 1499
 			duty_cycle = 1498;
 		}
-		if (bemf_counts < 15 ){
+		if (bemf_counts < 30 ){
 			if (duty_cycle > 500){
 				duty_cycle = 500;
 			}
@@ -918,8 +899,8 @@ int main(void)
 		}
 		if (bemf_counts < 5 ){
 
-					if (duty_cycle < 100){
-						duty_cycle = 100;
+					if (duty_cycle < start_power){
+						duty_cycle = start_power;
 					}
 				}
 
@@ -929,6 +910,7 @@ int main(void)
 			TIM1->CCR1 = duty_cycle;                // sets duty cycle for PWM output
 			TIM1->CCR2 = duty_cycle;
 			TIM1->CCR3 = duty_cycle;
+			TIM1->CCR5 = pwm_settle;
 		}
 	}
 	if (input <= 100) {                   //if input is less than 100 stop all, needs work for proper restart on the fly
@@ -948,16 +930,15 @@ int main(void)
 		TIM1->CCR3 = 1;
 	}
 
-	zctimeout++;                                    // increments zero cross timeout counter
-	if (zctimeout > zc_timeout_threshold) {               // if over threshold
-		bemf_counts = 0;
-		HAL_COMP_Stop_IT(&hcomp1);
-		allOff();                                         // stop motor and restart
-		running = 0;
-		commutation_interval = 0;
-		zctimeout = 0;
-		//			}
-	}
+
+	if (TIM3->CNT > 40000){          // if the commutation timer goes past a normal commuatation length ZC's have timed out
+		  running = 0;
+		  started = 0;
+		  TIM3->CNT = 0;
+
+		}
+
+
 
 	if (started == 1) {                           // Start the motor
 		if (running == 0) {
@@ -1201,8 +1182,8 @@ static void MX_TIM1_Init(void)
   {
     _Error_Handler(__FILE__, __LINE__);
   }
-
- // sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.OCMode = TIM_OCMODE_TIMING;
+    sConfigOC.Pulse = 0;
   if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_5) != HAL_OK)
   {
     _Error_Handler(__FILE__, __LINE__);
@@ -1211,7 +1192,7 @@ static void MX_TIM1_Init(void)
   sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
   sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
   sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
-  sBreakDeadTimeConfig.DeadTime = 0;
+  sBreakDeadTimeConfig.DeadTime = 120;
   sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
   sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
   sBreakDeadTimeConfig.BreakFilter = 0;
